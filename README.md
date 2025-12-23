@@ -1,6 +1,12 @@
-# @omni-comment/core
+# omni-comment
 
 Combine outputs from many jobs into a single comment
+
+## Installation
+
+```bash
+pip install omni-comment
+```
 
 ## Usage
 
@@ -13,17 +19,18 @@ sections:
   - perf_stats
 ```
 
-Now, import and call the `omniComment` function to create or update the comment.
+Now, import and call the `omni_comment` function to create or update the comment.
 
-```ts
-import { omniComment } from "@omni-comment/core"
+```python
+from omni_comment import omni_comment
 
-await omniComment({
-  message: "Hello world",
-  issueNumber: 123,
-  section: "test_results",
-  token: "github_token",
-})
+result = await omni_comment(
+    message="Hello world",
+    issue_number=123,
+    repo="owner/repo",
+    section="test_results",
+    token="github_token",
+)
 ```
 
 #### Options
@@ -32,13 +39,13 @@ await omniComment({
 | ------------- | ---------------------------------------------------------------- | -------- | ------------------ |
 | `token`       | GitHub auth token                                                | ✅       |                    |
 | `repo`        | The repository where to create the comment                       | ✅       |                    |
-| `issueNumber` | The issue number where to create the comment                     | ✅       |                    |
+| `issue_number`| The issue number where to create the comment                     | ✅       |                    |
 | `section`     | The section ID that matches with the value in `omni-comment.yml` | ✅       |                    |
 | `message`     | Comment body                                                     |          |                    |
 | `title`       | An optional title for the comment                                |          |                    |
-| `collapsed`   | Whether the comment should be collapsed by default               |          | `false`            |
+| `collapsed`   | Whether the comment should be collapsed by default               |          | `False`            |
 | `logger`      | A custom logger to use                                           |          |                    |
-| `configPath`  | Path to the config file                                          |          | `omni-comment.yml` |
+| `config_path` | Path to the config file                                          |          | `omni-comment.yml` |
 
 #### Metadata (`omni-comment.yml`)
 
