@@ -24,7 +24,7 @@ Now, import and call the `omni_comment` function to create or update the comment
 ```python
 from omni_comment import omni_comment
 
-result = await omni_comment(
+result = omni_comment(
     message="Hello world",
     issue_number=123,
     repo="owner/repo",
