@@ -123,6 +123,76 @@ def test_should_noop_if_no_comment_and_empty_content(config_file, mock_client):
     assert mock_client.post.call_count == 1
 
 
+def test_should_clear_comment_when_content_is_empty(config_file, mock_client):
+    blank_body = create_blank_comment(config_file)
+    existing_body = edit_comment_body(
+        blank_body, "test-section", "test comment body", title="test title"
+    )
+    existing_comment = {"id": 456, "html_url": "test-url", "body": existing_body}
+
+    # Mock lock acquisition
+    mock_client.post.return_value = make_mock_response({"id": 1}, status_code=201)
+
+    # First get returns list of comments, second returns the specific comment
+    mock_client.get.side_effect = [
+        make_mock_response([existing_comment]),  # find_comment
+        make_mock_response(existing_comment),  # update_comment fetch
+    ]
+
+    # Mock update
+    mock_client.patch.return_value = make_mock_response(
+        {"id": 456, "html_url": "test-url"}
+    )
+    mock_client.delete.return_value = make_mock_response({})
+
+    result = omni_comment(
+        config_path=config_file,
+        issue_number=123,
+        message="",
+        repo="owner/repo",
+        section="test-section",
+        token="faketoken",
+    )
+
+    assert result is not None
+    assert result.status == "updated"
+
+    # Check the body was cleared
+    call_args = mock_client.patch.call_args
+    body = call_args.kwargs["json"]["body"]
+    assert "test comment body" not in body
+    assert '<!-- mskelton/omni-comment start="test-section" -->' in body
+    assert '<!-- mskelton/omni-comment end="test-section" -->' in body
+
+
+def test_should_retry_lock_acquisition(config_file, mock_client, monkeypatch):
+    # Speed up the test by mocking sleep
+    monkeypatch.setattr("time.sleep", lambda x: None)
+
+    # First attempt returns 200 (lock exists), second returns 201 (acquired)
+    mock_client.post.side_effect = [
+        make_mock_response({"id": 1}, status_code=200),  # lock exists
+        make_mock_response({"id": 2}, status_code=201),  # lock acquired
+        make_mock_response({"id": 456, "html_url": "test-url"}),  # create comment
+    ]
+    mock_client.get.return_value = make_mock_response([])
+    mock_client.delete.return_value = make_mock_response({})
+
+    result = omni_comment(
+        config_path=config_file,
+        issue_number=123,
+        message="test message",
+        repo="owner/repo",
+        section="test-section",
+        token="faketoken",
+    )
+
+    assert result is not None
+    assert result.status == "created"
+    # Two lock attempts + one create comment
+    assert mock_client.post.call_count == 3
+
+
 def test_should_render_summary_details_when_title_specified(config_file, mock_client):
     # Mock lock acquisition
     mock_client.post.side_effect = [

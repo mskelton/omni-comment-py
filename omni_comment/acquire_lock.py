@@ -23,6 +23,7 @@ def acquire_lock(issue_id: int, ctx: Context) -> Iterator[None]:
 
         # Create a reaction to act as a lock
         response = ctx.client.post(url, json={"content": "eyes"})
+        response.raise_for_status()
         data = response.json()
         reaction_id = data.get("id")
 
