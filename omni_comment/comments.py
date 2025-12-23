@@ -6,22 +6,33 @@ def _create_identifier(key: str, value: str) -> str:
     return f'<!-- mskelton/omni-comment {key}="{value}" -->'
 
 
-async def find_comment(pr_number: int, ctx: Context):
+def find_comment(pr_number: int, ctx: Context):
     if ctx.logger:
         ctx.logger.debug("Searching for existing comment...")
 
     comment_tag_pattern = _create_identifier("id", "main")
-    repo = ctx.github.get_repo(f"{ctx.repo.owner}/{ctx.repo.repo}")
-    issue = repo.get_issue(pr_number)
+    url = f"/repos/{ctx.repo.owner}/{ctx.repo.repo}/issues/{pr_number}/comments"
 
-    for comment in issue.get_comments():
-        if comment.body and comment_tag_pattern in comment.body:
-            return comment
+    # Paginate through all comments
+    page = 1
+    while True:
+        response = ctx.client.get(url, params={"page": page, "per_page": 100})
+        response.raise_for_status()
+        comments = response.json()
+
+        if not comments:
+            break
+
+        for comment in comments:
+            if comment.get("body") and comment_tag_pattern in comment["body"]:
+                return comment
+
+        page += 1
 
     return None
 
 
-async def create_comment(
+def create_comment(
     issue_number: int,
     title: str,
     section: str,
@@ -33,22 +44,22 @@ async def create_comment(
     if ctx.logger:
         ctx.logger.debug("Creating comment...")
 
-    repo = ctx.github.get_repo(f"{ctx.repo.owner}/{ctx.repo.repo}")
-    issue = repo.get_issue(issue_number)
+    url = f"/repos/{ctx.repo.owner}/{ctx.repo.repo}/issues/{issue_number}/comments"
 
     body = edit_comment_body(
-        body=await create_blank_comment(config_path),
+        body=create_blank_comment(config_path),
         section=section,
         content=content,
         title=title,
         collapsed=collapsed,
     )
 
-    comment = issue.create_comment(body)
-    return comment
+    response = ctx.client.post(url, json={"body": body})
+    response.raise_for_status()
+    return response.json()
 
 
-async def update_comment(
+def update_comment(
     comment_id: int,
     title: str,
     section: str,
@@ -59,26 +70,32 @@ async def update_comment(
     if ctx.logger:
         ctx.logger.debug("Updating comment...")
 
-    repo = ctx.github.get_repo(f"{ctx.repo.owner}/{ctx.repo.repo}")
-    comment = repo.get_issue_comment(comment_id)
+    url = f"/repos/{ctx.repo.owner}/{ctx.repo.repo}/issues/comments/{comment_id}"
 
-    if not comment.body:
+    # Fetch the existing comment
+    response = ctx.client.get(url)
+    response.raise_for_status()
+    comment = response.json()
+
+    if not comment.get("body"):
         raise ValueError("Comment body is empty")
 
     new_body = edit_comment_body(
-        body=comment.body,
+        body=comment["body"],
         section=section,
         content=content,
         title=title,
         collapsed=collapsed,
     )
 
-    comment.edit(new_body)
-    return comment
+    # Update the comment
+    response = ctx.client.patch(url, json={"body": new_body})
+    response.raise_for_status()
+    return response.json()
 
 
-async def create_blank_comment(config_path: str) -> str:
-    metadata = await read_metadata(config_path)
+def create_blank_comment(config_path: str) -> str:
+    metadata = read_metadata(config_path)
 
     parts: list[str] = [_create_identifier("id", "main")]
 

@@ -1,53 +1,54 @@
-from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from contextlib import contextmanager
+from typing import Iterator
 
 from .retry import retry
 from .utils import Context
 
 
-@asynccontextmanager
-async def acquire_lock(issue_id: int, ctx: Context) -> AsyncIterator[None]:
+@contextmanager
+def acquire_lock(issue_id: int, ctx: Context) -> Iterator[None]:
     """
     Acquire a lock on an issue using reactions to prevent race conditions.
     Uses the 'eyes' reaction as a mutex.
     """
-    repo = ctx.github.get_repo(f"{ctx.repo.owner}/{ctx.repo.repo}")
-    issue = repo.get_issue(issue_id)
-    reaction = None
+    url = f"/repos/{ctx.repo.owner}/{ctx.repo.repo}/issues/{issue_id}/reactions"
+    reaction_id: int | None = None
 
-    async def try_acquire(attempt: int, max_attempts: int):
-        nonlocal reaction
+    def try_acquire(attempt: int, max_attempts: int):
+        nonlocal reaction_id
         if ctx.logger:
             ctx.logger.debug(
                 f"Attempting to acquire lock (attempt {attempt + 1}/{max_attempts})..."
             )
 
         # Create a reaction to act as a lock
-        reaction = issue.create_reaction("eyes")
+        response = ctx.client.post(url, json={"content": "eyes"})
+        data = response.json()
+        reaction_id = data.get("id")
 
-        # PyGithub doesn't return status codes directly, so we check if reaction exists
-        # The lock is considered acquired if we successfully created the reaction
-        if reaction:
+        # Check if the reaction was newly created (201) vs already existed (200)
+        if response.status_code == 201:
             if ctx.logger:
                 ctx.logger.debug("Lock acquired")
-            return reaction
+            return
 
         # If we're on the last attempt, try to unlock to prevent deadlock
         if attempt + 1 == max_attempts:
-            await _unlock()
+            _unlock()
 
         raise RuntimeError("Lock not acquired")
 
-    async def _unlock():
-        nonlocal reaction
-        if reaction and ctx.logger:
-            ctx.logger.debug("Releasing lock...")
-        if reaction:
-            reaction.delete()
+    def _unlock():
+        nonlocal reaction_id
+        if reaction_id:
+            if ctx.logger:
+                ctx.logger.debug("Releasing lock...")
+            delete_url = f"/repos/{ctx.repo.owner}/{ctx.repo.repo}/issues/{issue_id}/reactions/{reaction_id}"
+            ctx.client.delete(delete_url)
 
-    await retry(try_acquire, max_attempts=7, delay=1.0)
+    retry(try_acquire, max_attempts=7, delay=1.0)
 
     try:
         yield
     finally:
-        await _unlock()
+        _unlock()

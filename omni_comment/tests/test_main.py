@@ -14,25 +14,26 @@ def config_file(tmp_path):
     return str(config)
 
 
-@pytest.fixture
-def mock_github():
-    with patch("omni_comment.main.Github") as mock:
-        yield mock
+def make_mock_response(json_data, status_code=200):
+    """Create a mock httpx response."""
+    mock = MagicMock()
+    mock.json.return_value = json_data
+    mock.status_code = status_code
+    return mock
 
 
 @pytest.fixture
-def mock_issue(mock_github):
-    mock_repo = MagicMock()
-    mock_issue = MagicMock()
-    mock_github.return_value.get_repo.return_value = mock_repo
-    mock_repo.get_issue.return_value = mock_issue
-    return mock_issue
+def mock_client():
+    with patch("omni_comment.main.create_client") as mock:
+        client = MagicMock()
+        mock.return_value.__enter__.return_value = client
+        mock.return_value.__exit__.return_value = None
+        yield client
 
 
-@pytest.mark.asyncio
-async def test_should_fail_if_no_issue_number():
+def test_should_fail_if_no_issue_number():
     with pytest.raises(AssertionError, match="Issue number is required"):
-        await omni_comment(
+        omni_comment(
             issue_number=0,
             repo="test-repo",
             section="test-section",
@@ -40,14 +41,18 @@ async def test_should_fail_if_no_issue_number():
         )
 
 
-@pytest.mark.asyncio
-async def test_should_create_new_comment_when_none_exists(config_file, mock_issue):
-    mock_issue.get_comments.return_value = []
-    mock_issue.create_reaction.return_value = MagicMock(delete=MagicMock())
-    mock_comment = MagicMock(html_url="test-url", id=456)
-    mock_issue.create_comment.return_value = mock_comment
+def test_should_create_new_comment_when_none_exists(config_file, mock_client):
+    # Mock lock acquisition (201 = created)
+    mock_client.post.side_effect = [
+        make_mock_response({"id": 1}, status_code=201),  # lock acquired
+        make_mock_response({"id": 456, "html_url": "test-url"}),  # create comment
+    ]
+    # No existing comments
+    mock_client.get.return_value = make_mock_response([])
+    # Lock release
+    mock_client.delete.return_value = make_mock_response({})
 
-    result = await omni_comment(
+    result = omni_comment(
         config_path=config_file,
         issue_number=123,
         message="test message",
@@ -62,17 +67,26 @@ async def test_should_create_new_comment_when_none_exists(config_file, mock_issu
     assert result.status == "created"
 
 
-@pytest.mark.asyncio
-async def test_should_update_existing_comment(config_file, mock_github, mock_issue):
-    blank_body = await create_blank_comment(config_file)
-    existing_comment = MagicMock(body=blank_body, id=456, html_url="test-url")
-    mock_issue.get_comments.return_value = [existing_comment]
-    mock_issue.create_reaction.return_value = MagicMock(delete=MagicMock())
+def test_should_update_existing_comment(config_file, mock_client):
+    blank_body = create_blank_comment(config_file)
+    existing_comment = {"id": 456, "html_url": "test-url", "body": blank_body}
 
-    mock_repo = mock_github.return_value.get_repo.return_value
-    mock_repo.get_issue_comment.return_value = existing_comment
+    # Mock lock acquisition
+    mock_client.post.return_value = make_mock_response({"id": 1}, status_code=201)
 
-    result = await omni_comment(
+    # First get returns list of comments, second returns the specific comment
+    mock_client.get.side_effect = [
+        make_mock_response([existing_comment]),  # find_comment
+        make_mock_response(existing_comment),  # update_comment fetch
+    ]
+
+    # Mock update
+    mock_client.patch.return_value = make_mock_response(
+        {"id": 456, "html_url": "test-url"}
+    )
+    mock_client.delete.return_value = make_mock_response({})
+
+    result = omni_comment(
         config_path=config_file,
         issue_number=123,
         message="updated message",
@@ -85,15 +99,17 @@ async def test_should_update_existing_comment(config_file, mock_github, mock_iss
     assert result.html_url == "test-url"
     assert result.id == 456
     assert result.status == "updated"
-    existing_comment.edit.assert_called_once()
+    mock_client.patch.assert_called_once()
 
 
-@pytest.mark.asyncio
-async def test_should_noop_if_no_comment_and_empty_content(config_file, mock_issue):
-    mock_issue.get_comments.return_value = []
-    mock_issue.create_reaction.return_value = MagicMock(delete=MagicMock())
+def test_should_noop_if_no_comment_and_empty_content(config_file, mock_client):
+    # Mock lock acquisition
+    mock_client.post.return_value = make_mock_response({"id": 1}, status_code=201)
+    # No existing comments
+    mock_client.get.return_value = make_mock_response([])
+    mock_client.delete.return_value = make_mock_response({})
 
-    result = await omni_comment(
+    result = omni_comment(
         config_path=config_file,
         issue_number=123,
         message="",
@@ -103,19 +119,20 @@ async def test_should_noop_if_no_comment_and_empty_content(config_file, mock_iss
     )
 
     assert result is None
-    mock_issue.create_comment.assert_not_called()
+    # Only one post call for lock, not for creating comment
+    assert mock_client.post.call_count == 1
 
 
-@pytest.mark.asyncio
-async def test_should_render_summary_details_when_title_specified(
-    config_file, mock_issue
-):
-    mock_issue.get_comments.return_value = []
-    mock_issue.create_reaction.return_value = MagicMock(delete=MagicMock())
-    mock_comment = MagicMock(html_url="test-url", id=456)
-    mock_issue.create_comment.return_value = mock_comment
+def test_should_render_summary_details_when_title_specified(config_file, mock_client):
+    # Mock lock acquisition
+    mock_client.post.side_effect = [
+        make_mock_response({"id": 1}, status_code=201),  # lock
+        make_mock_response({"id": 456, "html_url": "test-url"}),  # create comment
+    ]
+    mock_client.get.return_value = make_mock_response([])
+    mock_client.delete.return_value = make_mock_response({})
 
-    result = await omni_comment(
+    result = omni_comment(
         config_path=config_file,
         issue_number=123,
         message="test message",
@@ -128,19 +145,23 @@ async def test_should_render_summary_details_when_title_specified(
     assert result is not None
     assert result.status == "created"
 
-    call_args = mock_issue.create_comment.call_args[0][0]
-    assert "<details open>" in call_args
-    assert "<summary><h2>test title</h2></summary>" in call_args
+    # Check the body passed to create_comment
+    call_args = mock_client.post.call_args_list[1]
+    body = call_args.kwargs["json"]["body"]
+    assert "<details open>" in body
+    assert "<summary><h2>test title</h2></summary>" in body
 
 
-@pytest.mark.asyncio
-async def test_can_render_collapsed_details(config_file, mock_issue):
-    mock_issue.get_comments.return_value = []
-    mock_issue.create_reaction.return_value = MagicMock(delete=MagicMock())
-    mock_comment = MagicMock(html_url="test-url", id=456)
-    mock_issue.create_comment.return_value = mock_comment
+def test_can_render_collapsed_details(config_file, mock_client):
+    # Mock lock acquisition
+    mock_client.post.side_effect = [
+        make_mock_response({"id": 1}, status_code=201),  # lock
+        make_mock_response({"id": 456, "html_url": "test-url"}),  # create comment
+    ]
+    mock_client.get.return_value = make_mock_response([])
+    mock_client.delete.return_value = make_mock_response({})
 
-    await omni_comment(
+    omni_comment(
         collapsed=True,
         config_path=config_file,
         issue_number=123,
@@ -151,20 +172,23 @@ async def test_can_render_collapsed_details(config_file, mock_issue):
         token="faketoken",
     )
 
-    call_args = mock_issue.create_comment.call_args[0][0]
-    assert "<details>" in call_args
-    assert "<details open>" not in call_args
+    call_args = mock_client.post.call_args_list[1]
+    body = call_args.kwargs["json"]["body"]
+    assert "<details>" in body
+    assert "<details open>" not in body
 
 
 class TestEditCommentBody:
     def test_replaces_section_content(self):
-        body = "\n".join([
-            '<!-- mskelton/omni-comment id="main" -->',
-            "",
-            '<!-- mskelton/omni-comment start="test" -->',
-            "old content",
-            '<!-- mskelton/omni-comment end="test" -->',
-        ])
+        body = "\n".join(
+            [
+                '<!-- mskelton/omni-comment id="main" -->',
+                "",
+                '<!-- mskelton/omni-comment start="test" -->',
+                "old content",
+                '<!-- mskelton/omni-comment end="test" -->',
+            ]
+        )
 
         result = edit_comment_body(body, "test", "new content")
 

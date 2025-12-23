@@ -10,9 +10,12 @@ class Metadata:
     title: str | None = None
 
 
-async def read_metadata(config_path: str) -> Metadata:
+def read_metadata(config_path: str) -> Metadata:
     with open(config_path) as f:
         data = yaml.safe_load(f)
+
+    if data is None:
+        data = {}
 
     return Metadata(
         sections=data.get("sections", []),

@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from github import Github
+import httpx
 
 from .logger import Logger
 
@@ -22,6 +22,17 @@ def parse_repo(repo: str) -> RepoContext:
 
 @dataclass
 class Context:
-    github: Github
+    client: httpx.Client
     repo: RepoContext
     logger: Logger | None = None
+
+
+def create_client(token: str) -> httpx.Client:
+    return httpx.Client(
+        base_url="https://api.github.com",
+        headers={
+            "Accept": "application/vnd.github+json",
+            "Authorization": f"Bearer {token}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
